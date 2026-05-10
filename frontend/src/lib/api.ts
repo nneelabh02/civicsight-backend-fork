@@ -1,6 +1,6 @@
 // src/lib/api.ts
 
-const API_URL = "https://civicsight-backend-sozy.onrender.com"; 
+const API_URL = "https://civicsight-backend-fork.onrender.com"; 
 
 export const CivicAPI = {
   // 1. Hit the POST /reports/ endpoint
