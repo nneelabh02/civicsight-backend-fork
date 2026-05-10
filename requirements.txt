@@ -37,7 +37,6 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 mmh3==5.2.1
 multidict==6.7.1
-ollama==0.6.2
 packaging==26.2
 postgrest==2.30.0
 propcache==0.4.1
@@ -81,3 +80,4 @@ websockets==15.0.1
 wrapt==2.1.2
 yarl==1.23.0
 zstandard==0.25.0
+google-generativeai
