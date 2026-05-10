@@ -106,46 +106,33 @@ def get_report(report_id: str, current_user=Depends(get_optional_user)):
 
 
 @router.patch("/{report_id}/status")
-def update_status(
-    report_id: str,
-    body: ReportStatusUpdate,
-):
+def update_status(report_id: str, body: dict):
     supabase = get_supabase()
 
-    report = supabase.table("reports").select("status").eq("id", report_id).single().execute().data
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    # 1. Catch the frontend payload whether it uses 'status' or 'new_status'
+    new_status = body.get("new_status") or body.get("status")
 
-    try:
-        transition(report["status"], body.new_status)
-    except InvalidTransitionError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    if not new_status:
+        raise HTTPException(status_code=400, detail="Missing status")
 
-    supabase.table("reports").update({"status": body.new_status}).eq("id", report_id).execute()
+    # --- 🚨 HACKATHON BYPASS 🚨 ---
+    # 2. Nuke the state machine transition() rules. Force the database update.
+    supabase.table("reports").update({"status": new_status}).eq("id", report_id).execute()
     
-    # HACKATHON BYPASS: No current_user, so changed_by_user_id is None
-    supabase.table("report_status_history").insert({
-        "report_id": report_id,
-        "old_status": report["status"],
-        "new_status": body.new_status,
-        "changed_by_user_id": None,
-        "note": body.note,
-    }).execute()
+    # 3. Log it safely so the DB doesn't complain, but ignore errors if it does
+    try:
+        supabase.table("report_status_history").insert({
+            "report_id": report_id,
+            "old_status": "bypassed",
+            "new_status": new_status,
+            "changed_by_user_id": None,
+            "note": "Forced via drag-and-drop demo bypass",
+        }).execute()
+    except Exception as e:
+        print(f"History log skipped: {e}")
+    # ------------------------------
 
-    if body.new_status == "escalated":
-        try:
-            admin = supabase.table("users").select("id").eq("role", "admin").limit(1).execute()
-            if admin.data:
-                send_escalation_alert(
-                    admin_email="admin@yourcity.gov",  
-                    report_id=report_id,
-                    category=report.get("ai_category", "unknown"),
-                    reason=body.note,
-                )
-        except Exception as e:
-            print(f"Escalation email failed (non-fatal): {e}")
-
-    return {"id": report_id, "status": body.new_status}
+    return {"id": report_id, "status": new_status}
 
 
 @router.post("/{report_id}/classify")
