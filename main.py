@@ -23,12 +23,16 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    # Explicitly whitelist localhost so we can safely keep credentials=True if needed
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "*" 
+    ],
+    allow_credentials=False, # <--- THIS IS THE MAGIC FIX. Set this to False.
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # ── Global exception handler ──────────────────────────────
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
