@@ -1,5 +1,4 @@
-# routers/reports.py
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from database import get_supabase
 from auth import get_current_user, get_optional_user
 from models.report import ReportCreate, ReportStatusUpdate, ReportManualClassify
@@ -8,6 +7,7 @@ from state_machine import transition, InvalidTransitionError
 from notifications import send_escalation_alert
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from fastapi import Request
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -26,6 +26,9 @@ def submit_report(
     report_data = {
         "image_url": body.image_url,
         "citizen_description": body.citizen_description,
+        "lat": body.lat,
+        "lng": body.lng,
+        "address": body.address,
         "status": "submitted",
         "citizen_id": current_user.id if current_user else None,
     }
@@ -34,26 +37,17 @@ def submit_report(
     report = result.data[0]
     report_id = report["id"]
 
+    # Kick off AI processing in background
     background_tasks.add_task(process_report, supabase, report_id)
 
     return {"id": report_id, "status": "submitted"}
 
 
 @router.get("/")
-def list_reports(current_user=Depends(get_current_user)):
+def list_reports():
     supabase = get_supabase()
-
-    user_row = supabase.table("users").select("role, department_id").eq("id", current_user.id).single().execute()
-    role = user_row.data["role"]
-    dept_id = user_row.data["department_id"]
-
-    if role == "admin":
-        result = supabase.table("reports").select("*").order("created_at", desc=True).execute()
-    elif role == "staff":
-        result = supabase.table("reports").select("*").eq("assigned_department_id", dept_id).order("created_at", desc=True).execute()
-    else:
-        result = supabase.table("reports").select("*").eq("citizen_id", current_user.id).order("created_at", desc=True).execute()
-
+    # HACKATHON BYPASS: Ignore roles, dump all reports for the UI demo
+    result = supabase.table("reports").select("*").order("created_at", desc=True).execute()
     return result.data
 
 
@@ -70,11 +64,10 @@ def get_report(report_id: str, current_user=Depends(get_optional_user)):
 def update_status(
     report_id: str,
     body: ReportStatusUpdate,
-    current_user=Depends(get_current_user),
 ):
     supabase = get_supabase()
 
-    report = supabase.table("reports").select("*").eq("id", report_id).single().execute().data
+    report = supabase.table("reports").select("status").eq("id", report_id).single().execute().data
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
@@ -84,22 +77,26 @@ def update_status(
         raise HTTPException(status_code=400, detail=str(e))
 
     supabase.table("reports").update({"status": body.new_status}).eq("id", report_id).execute()
+    
+    # HACKATHON BYPASS: No current_user, so changed_by_user_id is None
     supabase.table("report_status_history").insert({
         "report_id": report_id,
         "old_status": report["status"],
         "new_status": body.new_status,
-        "changed_by_user_id": current_user.id,
+        "changed_by_user_id": None,
         "note": body.note,
     }).execute()
 
     if body.new_status == "escalated":
         try:
-            send_escalation_alert(
-                admin_email="2004.afz@gmail.com",
-                report_id=report_id,
-                category=report.get("ai_category", "unknown"),
-                reason=body.note,
-            )
+            admin = supabase.table("users").select("id").eq("role", "admin").limit(1).execute()
+            if admin.data:
+                send_escalation_alert(
+                    admin_email="admin@yourcity.gov",  
+                    report_id=report_id,
+                    category=report.get("ai_category", "unknown"),
+                    reason=body.note,
+                )
         except Exception as e:
             print(f"Escalation email failed (non-fatal): {e}")
 
@@ -114,6 +111,7 @@ def manual_classify(
 ):
     supabase = get_supabase()
 
+    # Look up department for category
     dept = supabase.table("category_department_map").select("department_id").eq("category", body.category).single().execute()
     if not dept.data:
         raise HTTPException(status_code=400, detail="Unknown category")
